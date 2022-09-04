@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include "ImmersiveImpact/INILibrary/SimpleIni.h"
 #include "ImmersiveImpact/Utils.h"
+#include <skse64_common/SafeWrite.h>
 
 IDebugLog	gLog;
 const char* logPath = "\\My Games\\Skyrim Special Edition\\SKSE\\OneClickPowerAttack.log";
@@ -39,6 +40,7 @@ std::string skysaCommandR = "player.playidle PowerAttackForward";
 std::string skysaCommandLStanding = "player.playidle LeftHandPowerAttack";
 std::string skysaCommandRStanding = "player.playidle PowerAttackStanding";
 bool isAttacking = false;
+bool isLongPressPatched = false;
 
 /*RelocAddr<uintptr_t> AttackStopHandler_vtable(0x1671F30);
 RelocAddr<uintptr_t> AttackWinStartHandler_vtable(0x1671F00);
@@ -401,6 +403,12 @@ void LoadConfigs() {
 	rightHand = ini.GetValue("General", "Right", "player.pa ActionRightPowerAttack");
 	leftHand = ini.GetValue("General", "Left", "player.pa ActionLeftPowerAttack");
 	dualWield = ini.GetValue("General", "Dual", "player.pa ActionDualPowerAttack");
+	bool disableLongPress = std::stoi(ini.GetValue("General", "DisableLongPress", "1")) > 0;
+	if (disableLongPress && !isLongPressPatched) {
+		isLongPressPatched = true;
+		uintptr_t ptr_PACall = RelocAddr<uintptr_t>{ 0x709A50 };
+		SafeWrite8(ptr_PACall, 0xC3);
+	}
 	ini.Reset();
 	_MESSAGE("Keycode %d", paKey);
 	_MESSAGE("Done");
@@ -474,6 +482,7 @@ extern "C" {
 					HookAnimGraphEvent::Hook();
 					HookAttackBlockHandler::Hook((uintptr_t)pc->attackBlockHandler);
 					_MESSAGE("PlayerCharacter %llx", p);
+					_MESSAGE("Setting %llx", (*g_iniSettingCollection)->Get("fInitialPowerAttackDelay:Controls"));
 				}
 				else {
 					_MESSAGE("Failed to register inputEventHandler");
