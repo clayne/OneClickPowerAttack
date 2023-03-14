@@ -23,11 +23,10 @@ int paKey = 257;
 int modifierKey = -1;
 bool keyComboPressed = false;
 bool onlyFirstAttack = false;
+bool allowZeroStamina = false;
 int longPressMode = 2;
 bool isAttacking = false;
 bool isJumping = false;
-bool isBlocking = false;
-bool isBow = false;
 bool attackWindow = false;
 bool isLongPressPatched = false;
 float fInitialPowerAttackDelay = 0.3f;
@@ -103,8 +102,8 @@ uint32_t GamepadMaskToKeycode(uint32_t keyMask) {
 
 void GetAttackKeys() {
 	attackKeyboard = im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kKeyboard);
-	attackMouse = im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kMouse);
-	attackGamepad = im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kGamepad);
+	attackMouse = kMacro_NumKeyboardKeys + im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kMouse);
+	attackGamepad = GamepadMaskToKeycode(im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kGamepad));
 }
 
 void SendConsoleCommand(std::string s) {
@@ -125,7 +124,7 @@ void AltPowerAttack() {
 }
 
 void PowerAttack() {
-	if (isJumping || isBlocking) {
+	if (isJumping || p->actorState2.wantBlocking) {
 		SendConsoleCommand(lightAttack);
 		std::thread thread(AltPowerAttack);
 		thread.detach();
@@ -143,6 +142,7 @@ void LoadConfigs() {
 	paKey = std::stoi(ini.GetValue("General", "Keycode", "257"));
 	modifierKey = std::stoi(ini.GetValue("General", "ModifierKey", "-1"));
 	longPressMode = std::stoi(ini.GetValue("General", "LongPressMode", "0"));
+	allowZeroStamina = std::stoi(ini.GetValue("General", "AllowZeroStamina", "0")) > 0;
 	onlyFirstAttack = std::stoi(ini.GetValue("General", "SkipModifierDuringCombo", "0")) > 0;
 	bool disableLongPress = std::stoi(ini.GetValue("General", "DisableLongPress", "1")) > 0;
 	bool disableBlockKey = std::stoi(ini.GetValue("General", "DisableBlockKey", "0")) > 0;
@@ -199,7 +199,7 @@ class HookAttackBlockHandler {
 public:
 	typedef void (HookAttackBlockHandler::* FnProcessButton) (ButtonEvent*, void*);
 	void ProcessButton(ButtonEvent* a_event, void* a_data) {
-		if (isAttacking || keyComboPressed || (!isBow && longPressMode > 0)) {
+		if (longPressMode > 0) {
 			uint32_t keyMask = a_event->idCode;
 			uint32_t keyCode;
 			// Mouse
@@ -230,8 +230,15 @@ public:
 					break;
 			}
 
-			if (isAttackKey && isHeld && longPressMode > 0) return;
-			if (keyCode == paKey && isDown && keyComboPressed) return;
+			if (isAttackKey && isHeld) {
+				if (longPressMode == 2 && attackWindow) {
+					RepeatAttack();
+				}
+				else {
+					return;
+				}
+			};
+			if (keyCode == paKey && isDown && (keyComboPressed || modifierKey < 0)) return;
 		}
 		FnProcessButton fn = fnHash.at(*(uintptr_t*)this);
 		if (fn)
@@ -260,22 +267,15 @@ public:
 				if (currentState >= ATTACK_STATE_ENUM::kSwing && currentState <= ATTACK_STATE_ENUM::kBash) {
 					isAttacking = true;
 				}
-				else if (currentState >= ATTACK_STATE_ENUM::kBowDraw && currentState <= ATTACK_STATE_ENUM::kBowFollowThrough) {
-					isBow = true;
-				}
 				else {
 					isAttacking = false;
-					isBow = false;
 				}
 			}
 			else {
 				isAttacking = false;
-				isBow = false;
 			}
 			if (evn->tag == "JumpUp" || evn->tag == "JumpFall") isJumping = true;
 			if (evn->tag == "JumpLandEnd") isJumping = false;
-			if (evn->tag == "blockStartOut") isBlocking = true;
-			if (evn->tag == "blockStop") isBlocking = false;
 			if (evn->tag == "MCO_WinOpen") attackWindow = true;
 			if (evn->tag == "MCO_WinClose") attackWindow = false;
 		}
@@ -307,7 +307,7 @@ public:
 			return BSEventNotifyControl::kContinue;
 		uint32_t controlFlag = (uint32_t)UserEvents::USER_EVENT_FLAG::kMovement & (uint32_t)UserEvents::USER_EVENT_FLAG::kLooking;
 		if (mm->numPausesGame > 0 || ((im->enabledControls.underlying() & controlFlag) != controlFlag) || mm->IsMenuOpen("Dialogue Menu"sv)
-			|| p->actorState1.sitSleepState != SIT_SLEEP_STATE::kNormal || p->GetActorValue(ActorValue::kStamina) <= 0) {
+			|| p->actorState1.sitSleepState != SIT_SLEEP_STATE::kNormal || (!allowZeroStamina && p->GetActorValue(ActorValue::kStamina) <= 0)) {
 			return BSEventNotifyControl::kContinue;
 		}
 
@@ -342,28 +342,23 @@ public:
 					bool isUp = a_event->value == 0 && timer != 0;
 
 					if (console && console->uiMovie) {
-						bool isAttackKey = false;
-						switch (a_event->device.get()) {
-							case INPUT_DEVICE::kKeyboard:
-								isAttackKey = keyCode == attackKeyboard;
-								break;
-							case INPUT_DEVICE::kMouse:
-								isAttackKey = keyCode == attackMouse;
-								break;
-							case INPUT_DEVICE::kGamepad:
-								isAttackKey = keyCode == attackGamepad;
-								break;
-						}
 						if (keyCode == modifierKey && isDown) keyComboPressed = true;
 						if (keyCode == modifierKey && isUp) keyComboPressed = false;
 						if (keyCode == paKey && isDown) {
-							if (isAttackKey && keyComboPressed || (!isAttackKey && (modifierKey <= 0 || (onlyFirstAttack && isAttacking) || keyComboPressed))) {
-								PowerAttack();
+							if (modifierKey >= 0) {
+								if (onlyFirstAttack) {
+									if ((!isAttacking && keyComboPressed) || isAttacking) {
+										PowerAttack();
+									}
+								}
+								else {
+									if (keyComboPressed) {
+										PowerAttack();
+									}
+								}
 							}
-						}
-						if (longPressMode == 2) {
-							if (isAttackKey && isHeld && attackWindow) {
-								keyComboPressed ? PowerAttack() : RepeatAttack();
+							else {
+								PowerAttack();
 							}
 						}
 					}
