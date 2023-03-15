@@ -35,11 +35,11 @@ const static std::string powerAttack = "player.pa ActionRightPowerAttack";
 const static std::string lightAttack = "player.pa ActionRightAttack";
 
 bool IsRidingHorse(Actor* a) {
-	return (a->actorState1.sitSleepState == SIT_SLEEP_STATE::kRidingMount);
+	return (a->AsActorState()->actorState1.sitSleepState == SIT_SLEEP_STATE::kRidingMount);
 }
 
 bool IsInKillmove(Actor* a) {
-	return a->boolFlags.all(Actor::BOOL_FLAGS::kIsInKillMove);
+	return a->GetActorRuntimeData().boolFlags.all(Actor::BOOL_FLAGS::kIsInKillMove);
 }
 
 enum {
@@ -124,7 +124,7 @@ void AltPowerAttack() {
 }
 
 void PowerAttack() {
-	if (isJumping || p->actorState2.wantBlocking) {
+	if (isJumping || p->AsActorState()->actorState2.wantBlocking) {
 		SendConsoleCommand(lightAttack);
 		std::thread thread(AltPowerAttack);
 		thread.detach();
@@ -263,7 +263,7 @@ public:
 		Actor* a = stl::unrestricted_cast<Actor*>(evn->holder);
 		if (a) {
 			if (!IsRidingHorse(a) && !IsInKillmove(a)) {
-				ATTACK_STATE_ENUM currentState = (a->actorState1.meleeAttackState);
+				ATTACK_STATE_ENUM currentState = (a->AsActorState()->actorState1.meleeAttackState);
 				if (currentState >= ATTACK_STATE_ENUM::kSwing && currentState <= ATTACK_STATE_ENUM::kBash) {
 					isAttacking = true;
 				}
@@ -300,14 +300,15 @@ public:
 		if (!*evns)
 			return BSEventNotifyControl::kContinue;
 
-		if (!p->currentProcess || !p->currentProcess->middleHigh)
+		auto runtimeData = p->GetActorRuntimeData();
+		if (!runtimeData.currentProcess || !runtimeData.currentProcess->middleHigh)
 			return BSEventNotifyControl::kContinue;
 
 		if (IsRidingHorse(p) || IsInKillmove(p))
 			return BSEventNotifyControl::kContinue;
 		uint32_t controlFlag = (uint32_t)UserEvents::USER_EVENT_FLAG::kMovement & (uint32_t)UserEvents::USER_EVENT_FLAG::kLooking;
 		if (mm->numPausesGame > 0 || ((im->enabledControls.underlying() & controlFlag) != controlFlag) || mm->IsMenuOpen("Dialogue Menu"sv)
-			|| p->actorState1.sitSleepState != SIT_SLEEP_STATE::kNormal || (!allowZeroStamina && p->GetActorValue(ActorValue::kStamina) <= 0)) {
+			|| p->AsActorState()->actorState1.sitSleepState != SIT_SLEEP_STATE::kNormal || (!allowZeroStamina && p->AsActorValueOwner()->GetActorValue(ActorValue::kStamina) <= 0)) {
 			return BSEventNotifyControl::kContinue;
 		}
 
