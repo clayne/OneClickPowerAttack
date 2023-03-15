@@ -16,13 +16,13 @@ ControlMap* im;
 IMenu* console;
 UserEvents* inputString;
 CSimpleIniA ini(true, false, false);
-uint32_t attackKeyboard;
-uint32_t attackMouse;
-uint32_t attackGamepad;
+uint32_t attackKey[INPUT_DEVICE::kTotal] = { 0xFF, 0xFF, 0xFF };
+uint32_t blockKey[INPUT_DEVICE::kTotal] = { 0xFF, 0xFF, 0xFF };
 int paKey = 257;
 int modifierKey = -1;
 bool keyComboPressed = false;
 bool onlyFirstAttack = false;
+bool onlyDuringAttack = false;
 bool allowZeroStamina = false;
 int longPressMode = 2;
 bool isAttacking = false;
@@ -42,6 +42,7 @@ bool IsInKillmove(Actor* a) {
 	return a->GetActorRuntimeData().boolFlags.all(Actor::BOOL_FLAGS::kIsInKillMove);
 }
 
+//Enums from SKSE to get DXScanCodes
 enum {
 	// first 256 for keyboard, then 8 mouse buttons, then mouse wheel up, wheel down, then 16 gamepad buttons
 	kMacro_KeyboardOffset = 0,		// not actually used, just for self-documentation
@@ -100,12 +101,28 @@ uint32_t GamepadMaskToKeycode(uint32_t keyMask) {
 	}
 }
 
-void GetAttackKeys() {
-	attackKeyboard = im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kKeyboard);
-	attackMouse = kMacro_NumKeyboardKeys + im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kMouse);
-	attackGamepad = GamepadMaskToKeycode(im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kGamepad));
+//Store key settings after load/journal menu close for optimization
+//Since controlMap does not have a lock, it can lead to crashes if it is called every frame.
+void GetKeySettings() {
+	for (int i = INPUT_DEVICE::kKeyboard; i <= INPUT_DEVICE::kGamepad; ++i) {
+		switch (i) {
+			case INPUT_DEVICE::kKeyboard:
+				attackKey[i] = im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kKeyboard);
+				blockKey[i] = im->GetMappedKey(inputString->leftAttack, INPUT_DEVICE::kKeyboard);
+				break;
+			case INPUT_DEVICE::kMouse:
+				attackKey[i] = kMacro_NumKeyboardKeys + im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kMouse);
+				blockKey[i] = kMacro_NumKeyboardKeys + im->GetMappedKey(inputString->leftAttack, INPUT_DEVICE::kMouse);
+				break;
+			case INPUT_DEVICE::kGamepad:
+				attackKey[i] = GamepadMaskToKeycode(im->GetMappedKey(inputString->rightAttack, INPUT_DEVICE::kGamepad));
+				blockKey[i] = GamepadMaskToKeycode(im->GetMappedKey(inputString->leftAttack, INPUT_DEVICE::kGamepad));
+				break;
+		}
+	}
 }
 
+//Helper function to send console command
 void SendConsoleCommand(std::string s) {
 	std::array<GFxValue, 2> args;
 	console->uiMovie->CreateString(&args[0], "ExecuteCommand");
@@ -136,6 +153,7 @@ void RepeatAttack() {
 	SendConsoleCommand(lightAttack);
 }
 
+//Load configs from the ini file
 void LoadConfigs() {
 	logger::info("Loading configs");
 	ini.LoadFile("Data\\SKSE\\Plugins\\OneClickPowerAttack.ini");
@@ -144,12 +162,14 @@ void LoadConfigs() {
 	longPressMode = std::stoi(ini.GetValue("General", "LongPressMode", "0"));
 	allowZeroStamina = std::stoi(ini.GetValue("General", "AllowZeroStamina", "0")) > 0;
 	onlyFirstAttack = std::stoi(ini.GetValue("General", "SkipModifierDuringCombo", "0")) > 0;
+	onlyDuringAttack = std::stoi(ini.GetValue("General", "OnlyDuringAttack", "0")) > 0;
 	bool disableLongPress = std::stoi(ini.GetValue("General", "DisableLongPress", "1")) > 0;
 	bool disableBlockKey = std::stoi(ini.GetValue("General", "DisableBlockKey", "0")) > 0;
 	ini.Reset();
 	logger::info("Keycode {}", paKey);
 	logger::info("Done");
 
+	//This isn't the best way to do it but it's the easiest way to support all SE/AE builds
 	if (disableLongPress && !isLongPressPatched) {
 		for (auto it = INISettingCollection::GetSingleton()->settings.begin(); it != INISettingCollection::GetSingleton()->settings.end(); ++it) {
 			if (strcmp((*it)->name, "fInitialPowerAttackDelay:Controls") == 0) {
@@ -179,6 +199,7 @@ void LoadConfigs() {
 		isLongPressPatched = false;
 	}
 
+	//Unbind block key from all devices
 	if (disableBlockKey) {
 		for (int device = 0; device < 3; ++device) {
 			for (auto it = im->controlMap[UserEvents::INPUT_CONTEXT_ID::kGameplay]->deviceMappings[device].begin(); it != im->controlMap[UserEvents::INPUT_CONTEXT_ID::kGameplay]->deviceMappings[device].end(); ++it) {
@@ -192,9 +213,10 @@ void LoadConfigs() {
 		evn.oldUserEventFlag = im->enabledControls;
 		im->SendEvent(&evn);
 	}
-	GetAttackKeys();
+	GetKeySettings();
 }
 
+//Fired when the user presses the attack or block key
 class HookAttackBlockHandler {
 public:
 	typedef void (HookAttackBlockHandler::* FnProcessButton) (ButtonEvent*, void*);
@@ -217,19 +239,11 @@ public:
 			float timer = a_event->heldDownSecs;
 			bool isDown = a_event->value != 0 && timer == 0.0;
 			bool isHeld = a_event->value != 0 && timer > 0.5;
-			bool isAttackKey = false;
-			switch (a_event->device.get()) {
-				case INPUT_DEVICE::kKeyboard:
-					isAttackKey = keyCode == attackKeyboard;
-					break;
-				case INPUT_DEVICE::kMouse:
-					isAttackKey = keyCode == attackMouse;
-					break;
-				case INPUT_DEVICE::kGamepad:
-					isAttackKey = keyCode == attackGamepad;
-					break;
-			}
+			//Check if it's attack/block
+			bool isAttackKey = keyCode == attackKey[a_event->device.get()];
+			bool isBlockKey = keyCode == blockKey[a_event->device.get()];
 
+			//Repeat attack logic
 			if (isAttackKey && isHeld) {
 				if (longPressMode == 2 && attackWindow) {
 					RepeatAttack();
@@ -238,7 +252,10 @@ public:
 					return;
 				}
 			};
-			if (keyCode == paKey && isDown && (keyComboPressed || modifierKey < 0)) return;
+
+			//To provide consistency, don't block even if there's no PA combo connected to the attack
+			if (onlyDuringAttack && isBlockKey && isAttacking)
+				return;
 		}
 		FnProcessButton fn = fnHash.at(*(uintptr_t*)this);
 		if (fn)
@@ -255,6 +272,7 @@ private:
 };
 std::unordered_map<uintptr_t, HookAttackBlockHandler::FnProcessButton> HookAttackBlockHandler::fnHash;
 
+//Fired on anim events
 class HookAnimGraphEvent {
 public:
 	typedef BSEventNotifyControl (HookAnimGraphEvent::* FnReceiveEvent)(BSAnimationGraphEvent* evn, BSTEventSource<BSAnimationGraphEvent>* dispatcher);
@@ -262,6 +280,7 @@ public:
 	BSEventNotifyControl ReceiveEventHook(BSAnimationGraphEvent* evn, BSTEventSource<BSAnimationGraphEvent>* src) {
 		Actor* a = stl::unrestricted_cast<Actor*>(evn->holder);
 		if (a) {
+			//Record actor states
 			if (!IsRidingHorse(a) && !IsInKillmove(a)) {
 				ATTACK_STATE_ENUM currentState = (a->AsActorState()->actorState1.meleeAttackState);
 				if (currentState >= ATTACK_STATE_ENUM::kSwing && currentState <= ATTACK_STATE_ENUM::kBash) {
@@ -293,6 +312,7 @@ private:
 };
 std::unordered_map<uintptr_t, HookAnimGraphEvent::FnReceiveEvent> HookAnimGraphEvent::fnHash;
 
+//Fired on input events (obviously)
 using InputEvents = InputEvent*;
 class InputEventHandler : public BSTEventSink<InputEvents> {
 public:
@@ -300,22 +320,18 @@ public:
 		if (!*evns)
 			return BSEventNotifyControl::kContinue;
 
-		auto runtimeData = p->GetActorRuntimeData();
-		if (!runtimeData.currentProcess || !runtimeData.currentProcess->middleHigh)
-			return BSEventNotifyControl::kContinue;
-
 		if (IsRidingHorse(p) || IsInKillmove(p))
 			return BSEventNotifyControl::kContinue;
+
+		//Several conditions where OCPA shouldn't be working
 		uint32_t controlFlag = (uint32_t)UserEvents::USER_EVENT_FLAG::kMovement & (uint32_t)UserEvents::USER_EVENT_FLAG::kLooking;
 		if (mm->numPausesGame > 0 || ((im->enabledControls.underlying() & controlFlag) != controlFlag) || mm->IsMenuOpen("Dialogue Menu"sv)
-			|| p->AsActorState()->actorState1.sitSleepState != SIT_SLEEP_STATE::kNormal || (!allowZeroStamina && p->AsActorValueOwner()->GetActorValue(ActorValue::kStamina) <= 0)) {
+			|| p->AsActorState()->actorState1.sitSleepState != SIT_SLEEP_STATE::kNormal || (!allowZeroStamina && p->AsActorValueOwner()->GetActorValue(ActorValue::kStamina) <= 0))
 			return BSEventNotifyControl::kContinue;
-		}
 
 		for (InputEvent* e = *evns; e; e = e->next) {
 			switch (e->eventType.get()) {
 				case INPUT_EVENT_TYPE::kButton:
-				{
 					ButtonEvent* a_event = e->AsButtonEvent();
 
 					uint32_t keyMask = a_event->idCode;
@@ -345,26 +361,31 @@ public:
 					if (console && console->uiMovie) {
 						if (keyCode == modifierKey && isDown) keyComboPressed = true;
 						if (keyCode == modifierKey && isUp) keyComboPressed = false;
+						//Simplified logic for power attacks
+						//onlyDuringAttack? -> check isAttacking
+						//onlyFirstAttack? -> check keyComboPressed if it's not the first attack
+						//no modifier key? -> just power attack whenever the key was pressed
 						if (keyCode == paKey && isDown) {
-							if (modifierKey >= 0) {
-								if (onlyFirstAttack) {
-									if ((!isAttacking && keyComboPressed) || isAttacking) {
-										PowerAttack();
+							if ((isAttacking && onlyDuringAttack) || !onlyDuringAttack) {
+								if (modifierKey >= 0) {
+									if (onlyFirstAttack) {
+										if ((!isAttacking && keyComboPressed) || isAttacking) {
+											PowerAttack();
+										}
+									}
+									else {
+										if (keyComboPressed) {
+											PowerAttack();
+										}
 									}
 								}
 								else {
-									if (keyComboPressed) {
-										PowerAttack();
-									}
+									PowerAttack();
 								}
-							}
-							else {
-								PowerAttack();
 							}
 						}
 					}
-				}
-				break;
+					break;
 			}
 		}
 		return BSEventNotifyControl::kContinue;
@@ -372,19 +393,23 @@ public:
 	TES_HEAP_REDEFINE_NEW();
 };
 
+//Fired on menu events
 class MenuWatcher : public BSTEventSink<MenuOpenCloseEvent> {
 public:
 	virtual BSEventNotifyControl ProcessEvent(const MenuOpenCloseEvent* evn, BSTEventSource<MenuOpenCloseEvent>* dispatcher) override {
+		//Store console for sending commands
 		if (!console && evn->menuName == InterfaceStrings::GetSingleton()->console) {
 			console = mm->GetMenu("Console").get();
 			if (console)
 				logger::info("Console {:#x}", (uintptr_t)console);
 		}
+		//Load configs after loading
 		if (evn->menuName == InterfaceStrings::GetSingleton()->loadingMenu && evn->opening) {
 			LoadConfigs();
 		}
+		//Load key settings after closing journal menu
 		else if (evn->menuName == InterfaceStrings::GetSingleton()->journalMenu && !evn->opening) {
-			GetAttackKeys();
+			GetKeySettings();
 		}
 		return BSEventNotifyControl::kContinue;
 	}
