@@ -38,6 +38,9 @@ source_group(
 #########################################################################################################################
 message("Options:")
 option(BUILD_TESTS "Build unit tests." OFF)
+option(ENABLE_SKYRIM_SE "Enable SE." ON)
+option(ENABLE_SKYRIM_AE "Enable AE." ON)
+option(ENABLE_SKYRIM_VR "Enable VR." ON)
 message("\tTests: ${BUILD_TESTS}")
 
 ########################################################################################################################
