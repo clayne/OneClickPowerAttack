@@ -9,6 +9,7 @@ using namespace SKSE::log;
 using namespace SKSE::stl;
 
 const MessagingInterface* g_message = nullptr;
+const TaskInterface* g_task = nullptr;
 PlayerCharacter* p;
 PlayerControls* pc;
 BGSAction* actionRightPowerAttack;
@@ -129,13 +130,15 @@ void GetKeySettings() {
 	}
 }
 
-bool PerformAction(BGSAction* action, Actor* a) {
-	std::unique_ptr<TESActionData> data(TESActionData::Create());
-	data->source = NiPointer<TESObjectREFR>(a);
-	data->action = action;
-	typedef bool func_t(TESActionData*);
-	REL::Relocation<func_t> func{ RELOCATION_ID(40551, 41557) };
-	return func(data.get());
+void PerformAction(BGSAction* action, Actor* a) {
+	g_task->AddTask([action, a]() {
+		std::unique_ptr<TESActionData> data(TESActionData::Create());
+		data->source = NiPointer<TESObjectREFR>(a);
+		data->action = action;
+		typedef bool func_t(TESActionData*);
+		REL::Relocation<func_t> func{ RELOCATION_ID(40551, 41557) };
+		func(data.get());
+	});
 }
 
 //For Jumping Attack/Vanguard
@@ -162,7 +165,7 @@ void DualPowerAttack() {
 }
 
 void RepeatAttack() {
-	PerformAction(actionRightPowerAttack, p);
+	PerformAction(actionRightAttack, p);
 	//SendConsoleCommand(lightAttack);
 }
 
@@ -234,7 +237,8 @@ class HookAttackBlockHandler {
 public:
 	typedef void (HookAttackBlockHandler::* FnProcessButton) (ButtonEvent*, void*);
 	void ProcessButton(ButtonEvent* a_event, void* a_data) {
-		if (!IsRidingHorse(p) && !IsInKillmove(p)) {
+		TESObjectWEAP* weap = reinterpret_cast<TESObjectWEAP*>(p->GetEquippedObject(false));
+		if (!IsRidingHorse(p) && !IsInKillmove(p) && (!weap || !weap->IsBow())) {
 			uint32_t keyMask = a_event->idCode;
 			uint32_t keyCode;
 			// Mouse
@@ -486,6 +490,7 @@ SKSEPluginLoad(const LoadInterface* skse) {
 
 
 	Init(skse);
+	g_task = GetTaskInterface();
 	g_message = GetMessagingInterface();
 	g_message->RegisterListener([](MessagingInterface::Message* msg) -> void {
 		if (msg->type == MessagingInterface::kDataLoaded) {
