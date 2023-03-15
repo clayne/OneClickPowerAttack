@@ -28,24 +28,10 @@
       "dependencies": [
         "commonlibsse-ng"
       ]
-    },
-    "tests": {
-      "description": "Build tests for the SKSE plugin.",
-      "dependencies": [
-        {
-          "name": "oneclickpowerattack",
-          "default-features": false,
-          "features": [
-            "plugin"
-          ]
-        },
-        "catch2"
-      ]
     }
   },
   "default-features": [
     "scripts-dev",
-    "plugin",
-    "tests"
+    "plugin"
   ]
 }
