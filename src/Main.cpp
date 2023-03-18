@@ -10,11 +10,16 @@ using namespace SKSE::stl;
 
 const MessagingInterface* g_message = nullptr;
 const TaskInterface* g_task = nullptr;
+REL::Relocation<Setting*> fInitialPowerAttackDelay{ RELOCATION_ID(509496,381954) };
+REL::Relocation<float*> ptr_engineTime{ RELOCATION_ID(517597, 404125) };
 PlayerCharacter* p;
 PlayerControls* pc;
+BSAudioManager* am;
 BGSAction* actionRightPowerAttack;
 BGSAction* actionRightAttack;
 BGSAction* actionDualPowerAttack;
+BGSSoundDescriptorForm* debugPAPressSound;
+BGSSoundDescriptorForm* debugPAActivateSound;
 UI* mm;
 ControlMap* im;
 UserEvents* inputString;
@@ -24,8 +29,12 @@ uint32_t blockKey[INPUT_DEVICE::kTotal] = { 0xFF, 0xFF, 0xFF };
 int paKey = 257;
 int modifierKey = -1;
 bool keyComboPressed = false;
+
+int longPressMode = 2;
+bool allowZeroStamina = false;
 bool onlyFirstAttack = false;
 bool onlyDuringAttack = false;
+bool disableBlockDuringAttack = false;
 
 int dualPaKey = 257;
 int dualModifierKey = -1;
@@ -33,14 +42,79 @@ bool dualKeyComboPressed = false;
 bool dualOnlyFirstAttack = false;
 bool dualOnlyDuringAttack = false;
 
-bool allowZeroStamina = false;
-int longPressMode = 2;
+bool notifyWindow = false;
+float notifyDuration = 0.1f;
+TESEffectShader* notifyFX = nullptr;
+
+bool queuePA = false;
+float queuePAExpire = 0.2f;
+BGSAction* queuePAAction = nullptr;
 
 bool isAttacking = false;
 bool attackWindow = false;
-bool isLongPressPatched = false;
-float fInitialPowerAttackDelay = 0.3f;
-float fInitialPowerBashDelay = 0.3f;
+float paQueueTime = 0.f;
+
+bool debugPAPress = false;
+bool debugPAActivate = false;
+std::string MCOWinOpen = "MCO_WinOpen";
+std::string MCOWinClose = "MCO_WinOpen";
+std::string MCOPowerWinOpen = "MCO_PowerWinOpen";
+std::string MCOPowerWinClose = "MCO_PowerWinClose";
+
+std::string SplitString(const std::string str, const std::string delimiter, std::string& remainder) {
+	std::string ret;
+	size_t i = str.find(delimiter);
+	if (i == std::string::npos) {
+		ret = str;
+		remainder = "";
+		return ret;
+	}
+
+	ret = str.substr(0, i);
+	remainder = str.substr(i + 1);
+	return ret;
+}
+
+TESForm* GetFormFromMod(std::string modname, uint32_t formid) {
+	if (!modname.length() || !formid)
+		return nullptr;
+	TESDataHandler* dh = TESDataHandler::GetSingleton();
+	TESFile* modFile = nullptr;
+	for (auto it = dh->files.begin(); it != dh->files.end(); ++it) {
+		TESFile* f = *it;
+		if (strcmp(f->fileName, modname.c_str()) == 0) {
+			modFile = f;
+			break;
+		}
+	}
+	if (!modFile)
+		return nullptr;
+	uint8_t modIndex = modFile->compileIndex;
+	uint32_t id = formid;
+	if (modIndex < 0xFE) {
+		id |= ((uint32_t)modIndex) << 24;
+	}
+	else {
+		uint16_t lightModIndex = modFile->smallFileCompileIndex;
+		if (lightModIndex != 0xFFFF) {
+			id |= 0xFE000000 | (uint32_t(lightModIndex) << 12);
+		}
+	}
+	return TESForm::LookupByID(id);
+}
+
+template <class T = TESForm>
+T* GetFormFromConfigString(const std::string str) {
+	std::string formIDstr;
+	std::string plugin = SplitString(str, "|", formIDstr);
+	if (formIDstr.length() != 0) {
+		uint32_t formID = std::stoi(formIDstr, 0, 16);
+		T* form = skyrim_cast<T*, TESForm>(GetFormFromMod(plugin, formID));
+		if (form->formType == T::FORMTYPE)
+			return form;
+	}
+	return nullptr;
+}
 
 bool IsRidingHorse(Actor* a) {
 	return (a->AsActorState()->actorState1.sitSleepState == SIT_SLEEP_STATE::kRidingMount);
@@ -48,6 +122,10 @@ bool IsRidingHorse(Actor* a) {
 
 bool IsInKillmove(Actor* a) {
 	return a->GetActorRuntimeData().boolFlags.all(Actor::BOOL_FLAGS::kIsInKillMove);
+}
+
+bool IsPAQueued() {
+	return *ptr_engineTime - paQueueTime <= queuePAExpire;
 }
 
 //Enums from SKSE to get DXScanCodes
@@ -109,6 +187,14 @@ uint32_t GamepadMaskToKeycode(uint32_t keyMask) {
 	}
 }
 
+void PlayDebugSound(BGSSoundDescriptorForm* sound) {
+	BSSoundHandle handle;
+	am->BuildSoundDataFromDescriptor(handle, sound->soundDescriptor);
+	handle.SetVolume(1.f);
+	handle.SetObjectToFollow(p->Get3D());
+	handle.Play();
+}
+
 //Store key settings after load/journal menu close for optimization
 //Since controlMap does not have a lock, it can lead to crashes if it is called every frame.
 void GetKeySettings() {
@@ -137,7 +223,21 @@ void PerformAction(BGSAction* action, Actor* a) {
 		data->action = action;
 		typedef bool func_t(TESActionData*);
 		REL::Relocation<func_t> func{ RELOCATION_ID(40551, 41557) };
-		func(data.get());
+		bool succ = func(data.get());
+		if (succ) {
+			if (debugPAActivate && action->formID != 0x13005) {
+				PlayDebugSound(debugPAActivateSound);
+			}
+			if (IsPAQueued() && action == queuePAAction) {
+				paQueueTime = 0.f;
+			}
+		}
+		else {
+			if (queuePA) {
+				paQueueTime = *ptr_engineTime;
+				queuePAAction = action;
+			}
+		}
 	});
 }
 
@@ -145,14 +245,16 @@ void PerformAction(BGSAction* action, Actor* a) {
 void AltPowerAttack() {
 	std::this_thread::sleep_for(std::chrono::milliseconds(200));
 	PerformAction(actionRightPowerAttack, p);
-	//SendConsoleCommand(powerAttack);
 }
 
 void PowerAttack() {
+	if (debugPAPress)
+		PlayDebugSound(debugPAPressSound);
 	bool isJumping = false;
 	p->GetGraphVariableBool("bInJumpState", isJumping);
-	if (isJumping || p->AsActorState()->actorState2.wantBlocking) {
-		//SendConsoleCommand(lightAttack);
+	bool isBlocking = false;
+	p->GetGraphVariableBool("IsBlocking", isBlocking);
+	if (isJumping || isBlocking) {
 		PerformAction(actionRightAttack, p);
 		std::thread thread(AltPowerAttack);
 		thread.detach();
@@ -166,70 +268,78 @@ void DualPowerAttack() {
 
 void RepeatAttack() {
 	PerformAction(actionRightAttack, p);
-	//SendConsoleCommand(lightAttack);
+}
+
+//Resets some variables after load
+void ResetVariables() {
+	paQueueTime = 0.f;
+	isAttacking = false;
 }
 
 //Load configs from the ini file
 void LoadConfigs() {
-	logger::info("Loading configs");
-	ini.LoadFile("Data\\SKSE\\Plugins\\OneClickPowerAttack.ini");
-	paKey = std::stoi(ini.GetValue("General", "Keycode", "257"));
-	modifierKey = std::stoi(ini.GetValue("General", "ModifierKey", "-1"));
-	longPressMode = std::stoi(ini.GetValue("General", "LongPressMode", "0"));
-	allowZeroStamina = std::stoi(ini.GetValue("General", "AllowZeroStamina", "0")) > 0;
-	onlyFirstAttack = std::stoi(ini.GetValue("General", "SkipModifierDuringCombo", "0")) > 0;
-	onlyDuringAttack = std::stoi(ini.GetValue("General", "OnlyDuringAttack", "0")) > 0;
-	bool disableBlockKey = std::stoi(ini.GetValue("General", "DisableBlockKey", "0")) > 0;
-	dualPaKey = std::stoi(ini.GetValue("DualAttack", "Keycode", "257"));
-	dualModifierKey = std::stoi(ini.GetValue("DualAttack", "ModifierKey", "42"));
-	dualOnlyFirstAttack = std::stoi(ini.GetValue("DualAttack", "SkipModifierDuringCombo", "0")) > 0;
-	dualOnlyDuringAttack = std::stoi(ini.GetValue("DualAttack", "OnlyDuringAttack", "0")) > 0;
-	ini.Reset();
-	logger::info("Done");
+	std::string path = "Data\\MCM\\Config\\OCPA\\settings.ini";
+	if (std::filesystem::exists("Data\\MCM\\Settings\\OCPA.ini")) {
+		path = "Data\\MCM\\Settings\\OCPA.ini";
+	}
+	SI_Error result = ini.LoadFile(path.c_str());
+	if (result >= 0) {
+		paKey = std::stoi(ini.GetValue("General", "iKeycode", "257"));
+		modifierKey = std::stoi(ini.GetValue("General", "iModifierKey", "-1"));
+		longPressMode = std::stoi(ini.GetValue("General", "iLongPressMode", "2"));
+		allowZeroStamina = std::stoi(ini.GetValue("General", "bAllowZeroStamina", "1")) > 0;
+		onlyFirstAttack = std::stoi(ini.GetValue("General", "bSkipModifierDuringCombo", "0")) > 0;
+		onlyDuringAttack = std::stoi(ini.GetValue("General", "bOnlyDuringAttack", "1")) > 0;
+		disableBlockDuringAttack = std::stoi(ini.GetValue("General", "bDisableBlockDuringAttack", "1")) > 0;
+		bool disableBlockKey = std::stoi(ini.GetValue("General", "bDisableBlockKey", "0")) > 0;
 
-	//This isn't the best way to do it but it's the easiest way to support all SE/AE builds
-	if (longPressMode > 0 && !isLongPressPatched) {
-		for (auto it = INISettingCollection::GetSingleton()->settings.begin(); it != INISettingCollection::GetSingleton()->settings.end(); ++it) {
-			if (strcmp((*it)->name, "fInitialPowerAttackDelay:Controls") == 0) {
-				fInitialPowerAttackDelay = (*it)->GetFloat();
-				(*it)->data.f = 999999.f;
-				pc->attackBlockHandler->initialPowerAttackDelay = 999999.f;
-			}
-			else if (strcmp((*it)->name, "fInitialPowerBashDelay:Controls") == 0) {
-				fInitialPowerBashDelay = (*it)->GetFloat();
-				(*it)->data.f = 999999.f;
+		dualPaKey = std::stoi(ini.GetValue("DualAttack", "iKeycode", "257"));
+		dualModifierKey = std::stoi(ini.GetValue("DualAttack", "iModifierKey", "42"));
+		dualOnlyFirstAttack = std::stoi(ini.GetValue("DualAttack", "bSkipModifierDuringCombo", "0")) > 0;
+		dualOnlyDuringAttack = std::stoi(ini.GetValue("DualAttack", "bOnlyDuringAttack", "0")) > 0;
+
+		notifyWindow = std::stoi(ini.GetValue("MCO", "iNotifyAttackWindow", "1")) > 0;
+		notifyDuration = std::stof(ini.GetValue("MCO", "fNotifyDuration", "0.15"));
+		std::string notifyFXStr = ini.GetValue("MCO", "sNotifyEffect", "OCPA.esl|0xD63");
+		queuePA = std::stoi(ini.GetValue("MCO", "bQueuePowerAttack", "1")) > 0;
+		queuePAExpire = std::stof(ini.GetValue("MCO", "fQueueExpire", "0.2"));
+
+		debugPAPress = std::stoi(ini.GetValue("Debug", "bNotifyPress", "0")) > 0;
+		debugPAActivate = std::stoi(ini.GetValue("Debug", "bNotifyActivate", "0")) > 0;
+		float powerAttackCooldown = std::stof(ini.GetValue("Debug", "fPowerAttackCooldown", "0"));
+		MCOWinOpen = ini.GetValue("MCO", "sMCOWinOpen", "MCO_WinOpen");
+		MCOWinClose = ini.GetValue("MCO", "sMCOWinClose", "MCO_WinClose");
+		MCOPowerWinOpen = ini.GetValue("MCO", "sMCOPowerWinOpen", "MCO_PowerWinOpen");
+		MCOPowerWinClose = ini.GetValue("MCO", "sMCOPowerWinClose", "MCO_PowerWinClose");
+
+		notifyFX = GetFormFromConfigString<TESEffectShader>(notifyFXStr);
+
+		for (auto it = GameSettingCollection::GetSingleton()->settings.begin(); it != GameSettingCollection::GetSingleton()->settings.end(); ++it) {
+			if (strcmp((*it).first, "fPowerAttackCoolDownTime") == 0) {
+				(*it).second->data.f = powerAttackCooldown;
 			}
 		}
-		isLongPressPatched = true;
-	}
-	else if (isLongPressPatched) {
-		for (auto it = INISettingCollection::GetSingleton()->settings.begin(); it != INISettingCollection::GetSingleton()->settings.end(); ++it) {
-			if (strcmp((*it)->name, "fInitialPowerAttackDelay:Controls") == 0) {
-				(*it)->data.f = fInitialPowerAttackDelay;
-				pc->attackBlockHandler->initialPowerAttackDelay = fInitialPowerAttackDelay;
-			}
-			else if (strcmp((*it)->name, "fInitialPowerBashDelay:Controls") == 0) {
-				(*it)->data.f = fInitialPowerBashDelay;
-			}
-		}
-		isLongPressPatched = false;
-	}
 
-	//Unbind block key from all devices
-	if (disableBlockKey) {
-		for (int device = 0; device < 3; ++device) {
-			for (auto it = im->controlMap[UserEvents::INPUT_CONTEXT_ID::kGameplay]->deviceMappings[device].begin(); it != im->controlMap[UserEvents::INPUT_CONTEXT_ID::kGameplay]->deviceMappings[device].end(); ++it) {
-				if ((*it).eventID == inputString->leftAttack) {
-					(*it).inputKey = 0xFF;
+		//Unbind block key from all devices
+		if (disableBlockKey) {
+			for (int device = 0; device < 3; ++device) {
+				for (auto it = im->controlMap[UserEvents::INPUT_CONTEXT_ID::kGameplay]->deviceMappings[device].begin(); it != im->controlMap[UserEvents::INPUT_CONTEXT_ID::kGameplay]->deviceMappings[device].end(); ++it) {
+					if ((*it).eventID == inputString->leftAttack) {
+						(*it).inputKey = 0xFF;
+					}
 				}
 			}
+			UserEventEnabled evn;
+			evn.newUserEventFlag = im->enabledControls;
+			evn.oldUserEventFlag = im->enabledControls;
+			im->SendEvent(&evn);
 		}
-		UserEventEnabled evn;
-		evn.newUserEventFlag = im->enabledControls;
-		evn.oldUserEventFlag = im->enabledControls;
-		im->SendEvent(&evn);
+		GetKeySettings();
 	}
-	GetKeySettings();
+	else {
+		logger::critical("Failed to load config.");
+	}
+	ini.Reset();
 }
 
 //Fired when the user presses the attack or block key
@@ -238,7 +348,7 @@ public:
 	typedef void (HookAttackBlockHandler::* FnProcessButton) (ButtonEvent*, void*);
 	void ProcessButton(ButtonEvent* a_event, void* a_data) {
 		TESObjectWEAP* weap = reinterpret_cast<TESObjectWEAP*>(p->GetEquippedObject(false));
-		if (!IsRidingHorse(p) && !IsInKillmove(p) && (!weap || !weap->IsBow())) {
+		if (!IsRidingHorse(p) && !IsInKillmove(p) && (!weap || !weap->IsBow() || !weap->IsStaff() || !weap->IsCrossbow())) {
 			uint32_t keyMask = a_event->idCode;
 			uint32_t keyCode;
 			// Mouse
@@ -255,7 +365,7 @@ public:
 
 			float timer = a_event->heldDownSecs;
 			bool isDown = a_event->value != 0 && timer == 0.0;
-			bool isHeld = a_event->value != 0 && timer > 0.5;
+			bool isHeld = a_event->value != 0 && timer > 0;
 			bool isUp = a_event->value == 0 && timer != 0;
 			//Check if it's attack/block
 			bool isAttackKey = keyCode == attackKey[a_event->device.get()];
@@ -273,14 +383,16 @@ public:
 						if (longPressMode == 2 && attackWindow) {
 							RepeatAttack();
 						}
-						return;
+						if (timer >= fInitialPowerAttackDelay->GetFloat())
+							return;
 					}
 				};
-
-				//To provide consistency, don't block even if there's no PA combo connected to the attack
-				if (onlyDuringAttack && isBlockKey && isAttacking)
-					return;
 			}
+
+			//To provide consistency, don't block even if there's no PA combo connected to the attack
+			if (isBlockKey && isAttacking)
+				if (onlyDuringAttack || disableBlockDuringAttack)
+					return;
 		}
 
 		FnProcessButton fn = fnHash.at(*(uintptr_t*)this);
@@ -309,7 +421,7 @@ public:
 			//Record actor states
 			if (!IsRidingHorse(a) && !IsInKillmove(a)) {
 				ATTACK_STATE_ENUM currentState = (a->AsActorState()->actorState1.meleeAttackState);
-				if (currentState >= ATTACK_STATE_ENUM::kSwing && currentState <= ATTACK_STATE_ENUM::kBash) {
+				if (currentState >= ATTACK_STATE_ENUM::kDraw && currentState <= ATTACK_STATE_ENUM::kBash) {
 					isAttacking = true;
 				}
 				else {
@@ -319,8 +431,21 @@ public:
 			else {
 				isAttacking = false;
 			}
-			if (evn->tag == "MCO_WinOpen") attackWindow = true;
-			if (evn->tag == "MCO_WinClose") attackWindow = false;
+			if (evn->tag == MCOWinOpen.c_str()) {
+				attackWindow = true;
+				if (notifyWindow) {
+					if (notifyFX) {
+						p->InstantiateHitShader(notifyFX, notifyDuration);
+					}
+					else {
+						logger::critical("NotifyEffect is not valid!");
+					}
+				}
+			}
+			else if (evn->tag == MCOWinClose.c_str()) attackWindow = false;
+			else if (IsPAQueued() && (evn->tag == MCOPowerWinOpen.c_str() || evn->tag == MCOPowerWinClose.c_str())) {
+				PerformAction(queuePAAction, p);
+			}
 		}
 		FnReceiveEvent fn = fnHash.at(*(uintptr_t*)this);
 		return fn ? (this->*fn)(evn, src) : BSEventNotifyControl::kContinue;
@@ -379,8 +504,11 @@ public:
 
 					float timer = a_event->heldDownSecs;
 					bool isDown = a_event->value != 0 && timer == 0.0;
-					bool isHeld = a_event->value != 0 && timer > 0.5;
+					bool isHeld = a_event->value != 0 && timer > 0;
 					bool isUp = a_event->value == 0 && timer != 0;
+
+					bool wantPowerAttack = false;
+					bool wantDualPowerAttack = false;
 
 					if (keyCode == modifierKey && isDown) keyComboPressed = true;
 					if (keyCode == modifierKey && isUp) keyComboPressed = false;
@@ -388,22 +516,24 @@ public:
 					//onlyDuringAttack? -> check isAttacking
 					//onlyFirstAttack? -> check keyComboPressed if it's not the first attack
 					//no modifier key? -> just power attack whenever the key was pressed
-					if (keyCode == paKey && isDown) {
-						if ((isAttacking && onlyDuringAttack) || !onlyDuringAttack) {
-							if (modifierKey >= 0) {
-								if (onlyFirstAttack) {
-									if ((!isAttacking && keyComboPressed) || isAttacking) {
-										PowerAttack();
+					if (keyCode == paKey) {
+						if (isDown) {
+							if ((isAttacking && onlyDuringAttack) || !onlyDuringAttack) {
+								if (modifierKey >= 2) {
+									if (onlyFirstAttack) {
+										if ((!isAttacking && keyComboPressed) || isAttacking) {
+											wantPowerAttack = true;
+										}
+									}
+									else {
+										if (keyComboPressed) {
+											wantPowerAttack = true;
+										}
 									}
 								}
 								else {
-									if (keyComboPressed) {
-										PowerAttack();
-									}
+									wantPowerAttack = true;
 								}
-							}
-							else {
-								PowerAttack();
 							}
 						}
 					}
@@ -411,23 +541,45 @@ public:
 					//Copypasta for dual attack
 					if (keyCode == dualModifierKey && isDown) dualKeyComboPressed = true;
 					if (keyCode == dualModifierKey && isUp) dualKeyComboPressed = false;
-					if (keyCode == dualPaKey && isDown) {
-						if ((isAttacking && dualOnlyDuringAttack) || !dualOnlyDuringAttack) {
-							if (dualModifierKey >= 0) {
-								if (dualOnlyFirstAttack) {
-									if ((!isAttacking && dualKeyComboPressed) || isAttacking) {
-										DualPowerAttack();
+					if (keyCode == dualPaKey) {
+						if (isDown) {
+							if ((isAttacking && dualOnlyDuringAttack) || !dualOnlyDuringAttack) {
+								if (dualModifierKey >= 2) {
+									if (dualOnlyFirstAttack) {
+										if ((!isAttacking && dualKeyComboPressed) || isAttacking) {
+											wantDualPowerAttack = true;
+										}
+									}
+									else {
+										if (dualKeyComboPressed) {
+											wantDualPowerAttack = true;
+										}
 									}
 								}
 								else {
-									if (dualKeyComboPressed) {
-										DualPowerAttack();
-									}
+									wantDualPowerAttack = true;
 								}
 							}
-							else {
-								DualPowerAttack();
-							}
+						}
+					}
+
+					if (wantPowerAttack && wantDualPowerAttack) {
+						if (modifierKey >= 2 && dualModifierKey < 2) {
+							PowerAttack();
+						}
+						else if (modifierKey < 2 && dualModifierKey >= 2) {
+							DualPowerAttack();
+						}
+						else {
+							PowerAttack();
+						}
+					}
+					else {
+						if (wantPowerAttack) {
+							PowerAttack();
+						}
+						else if (wantDualPowerAttack) {
+							DualPowerAttack();
 						}
 					}
 					break;
@@ -444,11 +596,13 @@ public:
 	virtual BSEventNotifyControl ProcessEvent(const MenuOpenCloseEvent* evn, BSTEventSource<MenuOpenCloseEvent>* dispatcher) override {
 		//Load configs after loading
 		if (evn->menuName == InterfaceStrings::GetSingleton()->loadingMenu && evn->opening) {
+			ResetVariables();
 			LoadConfigs();
 		}
 		//Load key settings after closing journal menu
 		else if (evn->menuName == InterfaceStrings::GetSingleton()->journalMenu && !evn->opening) {
 			GetKeySettings();
+			LoadConfigs();
 		}
 		return BSEventNotifyControl::kContinue;
 	}
@@ -500,9 +654,12 @@ SKSEPluginLoad(const LoadInterface* skse) {
 				pc = PlayerControls::GetSingleton();
 				im = ControlMap::GetSingleton();
 				mm = UI::GetSingleton();
+				am = BSAudioManager::GetSingleton();
 				actionRightAttack = (BGSAction*)TESForm::LookupByID(0x13005);
 				actionRightPowerAttack = (BGSAction*)TESForm::LookupByID(0x13383);
 				actionDualPowerAttack = (BGSAction*)TESForm::LookupByID(0x2E2F7);
+				debugPAPressSound = (BGSSoundDescriptorForm*)TESForm::LookupByID(0x3F3F8);
+				debugPAActivateSound = (BGSSoundDescriptorForm*)TESForm::LookupByID(0x3F3FA);
 				inputString = UserEvents::GetSingleton();
 				InputEventHandler* handler = new InputEventHandler();
 				inputEventDispatcher->AddEventSink(handler);
@@ -510,6 +667,7 @@ SKSEPluginLoad(const LoadInterface* skse) {
 				mm->GetEventSource<MenuOpenCloseEvent>()->AddEventSink(mw);
 				HookAnimGraphEvent::Hook();
 				HookAttackBlockHandler::Hook();
+				LoadConfigs();
 				logger::info("PlayerCharacter {:#x}", (uintptr_t)p);
 			}
 			else {
