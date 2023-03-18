@@ -1,0 +1,278 @@
+{
+  "modName": "OCPA",
+  "displayName": "$OCPA",
+  "cursorFillMode": "topToBottom",
+  "pages": [
+    {
+      "pageDisplayName": "$OCPA_Main",
+      "cursorFillMode": "topToBottom",
+      "content": [
+        {
+          "text": "$OCPA_RightKey_OptionText",
+          "type": "header"
+        },
+        {
+          "id": "iKeycode:General",
+          "text": "$OCPA_KeyCode",
+          "type": "keymap",
+          "help": "$OCPA_RightKey_InfoText",
+          "ignoreConflicts": true,
+          "valueOptions": {
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
+          "id": "iModifierKey:General",
+          "text": "$OCPA_Modifier_OptionText",
+          "type": "keymap",
+          "help": "$OCPA_Modifier_InfoText",
+          "ignoreConflicts": true,
+          "valueOptions": {
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
+          "id": "bSkipModifierDuringCombo:General",
+          "text": "$OCPA_SkipModifierDuringCombo_OptionText",
+          "type": "toggle",
+          "help": "$OCPA_SkipModifierDuringCombo_InfoText",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bOnlyDuringAttack:General",
+          "text": "$OCPA_OnlyDuringAttack_OptionText",
+          "type": "toggle",
+          "help": "$OCPA_OnlyDuringAttack_InfoText",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "text": "$OCPA_DualPA",
+          "type": "header"
+        },
+        {
+          "id": "iKeycode:DualAttack",
+          "text": "$OCPA_KeyCode",
+          "type": "keymap",
+          "help": "$OCPA_DualAttack_InfoText",
+          "ignoreConflicts": true,
+          "valueOptions": {
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
+          "id": "iModifierKey:DualAttack",
+          "text": "$OCPA_Modifier_OptionText",
+          "type": "keymap",
+          "help": "$OCPA_Modifier_InfoText",
+          "ignoreConflicts": true,
+          "valueOptions": {
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
+          "id": "bSkipModifierDuringCombo:DualAttack",
+          "text": "$OCPA_SkipModifierDuringCombo_OptionText",
+          "type": "toggle",
+          "help": "$OCPA_SkipModifierDuringCombo_InfoText",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bOnlyDuringAttack:DualAttack",
+          "text": "$OCPA_OnlyDuringAttack_OptionText",
+          "type": "toggle",
+          "help": "$OCPA_OnlyDuringAttack_InfoText",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "text": "$OCPA_Misc",
+          "type": "header",
+          "position": 1
+        },
+        {
+          "id": "iLongPressMode:General",
+          "text": "$OCPA_LongPressMode_OptionText",
+          "type": "enum",
+          "valueOptions": {
+            "options": [ "$OCPA_LongPressMode_Vanilla", "$OCPA_LongPressMode_DisableLongPressPowerAttack", "$OCPA_LongPressMode_RepeatNormalAttacks" ],
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
+          "id": "bAllowZeroStamina:General",
+          "text": "$OCPA_AllowZeroStamina_OptionText",
+          "type": "toggle",
+          "help": "$OCPA_AllowZeroStamina_InfoText",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bDisableBlockDuringAttack:General",
+          "text": "$OCPA_DisableBlockDuringAttack",
+          "type": "toggle",
+          "help": "$OCPA_DisableBlockDuringAttack_Desc",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bDisableBlockKey:General",
+          "text": "$OCPA_DisableBlockKey_OptionText",
+          "type": "toggle",
+          "help": "$OCPA_DisableBlockKey_InfoText",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        }
+      ]
+    },
+    {
+      "pageDisplayName": "$OCPA_MCO",
+      "cursorFillMode": "topToBottom",
+      "content": [
+        {
+          "text": "$OCPA_NotifyAttackWindow",
+          "type": "header"
+        },
+        {
+          "id": "bNotifyAttackWindow:MCO",
+          "text": "$OCPA_Enable",
+          "type": "toggle",
+          "help": "$OCPA_NotifyAttackWindow_Desc",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "fNotifyDuration:MCO",
+          "text": "$OCPA_NotifyDuration",
+          "type": "slider",
+          "help": "$OCPA_NotifyDuration_Desc",
+          "valueOptions": {
+            "min": 0,
+            "max": 1,
+            "step": 0.01,
+            "sourceType": "ModSettingFloat",
+            "formatString": "{2}"
+          }
+        },
+        {
+          "id": "sNotifyEffect:MCO",
+          "text": "$OCPA_NotifyEffect",
+          "type": "input",
+          "help": "$OCPA_NotifyEffect_Desc",
+          "valueOptions": {
+            "sourceType": "ModSettingString"
+          }
+        },
+        {
+          "text": "$OCPA_QueuePA",
+          "type": "header"
+        },
+        {
+          "id": "bQueuePowerAttack:MCO",
+          "text": "$OCPA_Enable",
+          "type": "toggle",
+          "help": "$OCPA_QueuePA_Desc",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "fQueueExpire:MCO",
+          "text": "$OCPA_QueueExpire",
+          "type": "slider",
+          "help": "$OCPA_QueueExpire_Desc",
+          "valueOptions": {
+            "min": 0,
+            "max": 1,
+            "step": 0.01,
+            "sourceType": "ModSettingFloat",
+            "formatString": "{2}"
+          }
+        }
+      ]
+    },
+    {
+      "pageDisplayName": "$OCPA_Debug",
+      "cursorFillMode": "topToBottom",
+      "content": [
+        {
+          "id": "bNotifyPress:Debug",
+          "text": "$OCPA_NotifyPress",
+          "type": "toggle",
+          "help": "$OCPA_NotifyPress_Desc",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bNotifyActivate:Debug",
+          "text": "$OCPA_NotifyActivate",
+          "type": "toggle",
+          "help": "$OCPA_NotifyActivate_Desc",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "fPowerAttackCooldown:Debug",
+          "text": "$OCPA_PowerAttackCooldown",
+          "type": "slider",
+          "help": "$OCPA_PowerAttackCooldown_Desc",
+          "valueOptions": {
+            "min": 0,
+            "max": 1,
+            "step": 0.01,
+            "sourceType": "ModSettingFloat",
+            "formatString": "{2}"
+          }
+        },
+        {
+          "text": "$OCPA_DONOTMODIFY",
+          "type": "header"
+        },
+        {
+          "id": "sMCOWinOpen:Debug",
+          "text": "$OCPA_MCOWinClose",
+          "type": "input",
+          "valueOptions": {
+            "sourceType": "ModSettingString"
+          }
+        },
+        {
+          "id": "sMCOWinClose:Debug",
+          "text": "$OCPA_MCOWinClose",
+          "type": "input",
+          "valueOptions": {
+            "sourceType": "ModSettingString"
+          }
+        },
+        {
+          "id": "sMCOPowerWinOpen:Debug",
+          "text": "$OCPA_MCOPowerWinOpen",
+          "type": "input",
+          "valueOptions": {
+            "sourceType": "ModSettingString"
+          }
+        },
+        {
+          "id": "sMCOPowerWinClose:Debug",
+          "text": "$OCPA_MCOPowerWinClose",
+          "type": "input",
+          "valueOptions": {
+            "sourceType": "ModSettingString"
+          }
+        }
+      ]
+    }
+  ]
+}
