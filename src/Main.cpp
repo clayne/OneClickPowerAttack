@@ -298,8 +298,8 @@ void LoadConfigs() {
 		dualOnlyFirstAttack = std::stoi(ini.GetValue("DualAttack", "bSkipModifierDuringCombo", "0")) > 0;
 		dualOnlyDuringAttack = std::stoi(ini.GetValue("DualAttack", "bOnlyDuringAttack", "0")) > 0;
 
-		notifyWindow = std::stoi(ini.GetValue("MCO", "iNotifyAttackWindow", "1")) > 0;
-		notifyDuration = std::stof(ini.GetValue("MCO", "fNotifyDuration", "0.15"));
+		notifyWindow = std::stoi(ini.GetValue("MCO", "bNotifyAttackWindow", "1")) > 0;
+		notifyDuration = std::stof(ini.GetValue("MCO", "fNotifyDuration", "0.05"));
 		std::string notifyFXStr = ini.GetValue("MCO", "sNotifyEffect", "OCPA.esl|0xD63");
 		queuePA = std::stoi(ini.GetValue("MCO", "bQueuePowerAttack", "1")) > 0;
 		queuePAExpire = std::stof(ini.GetValue("MCO", "fQueueExpire", "0.2"));
@@ -348,7 +348,7 @@ public:
 	typedef void (HookAttackBlockHandler::* FnProcessButton) (ButtonEvent*, void*);
 	void ProcessButton(ButtonEvent* a_event, void* a_data) {
 		TESObjectWEAP* weap = reinterpret_cast<TESObjectWEAP*>(p->GetEquippedObject(false));
-		if (!IsRidingHorse(p) && !IsInKillmove(p) && (!weap || !weap->IsBow() || !weap->IsStaff() || !weap->IsCrossbow())) {
+		if (!IsRidingHorse(p) && !IsInKillmove(p) && (!weap || (!weap->IsBow() && !weap->IsStaff() && !weap->IsCrossbow()))) {
 			uint32_t keyMask = a_event->idCode;
 			uint32_t keyCode;
 			// Mouse
